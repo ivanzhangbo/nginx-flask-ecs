@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: VPC Template For Multi-AZ
+# Parameters:
+#   MasterUserName:
+#     Description: RDS master user name
+#     Type: String
+#   MasterUserPassword:
+#     Description: RDS master user password
+#     Type: String
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'false'
+      Tags:
+        - Key: Name
+          Value: SimplechatVPC
+  eip:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+  subnetPub1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public-Subnet-1
+  subnetPub2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public-Subnet-2
+  subnetPrv1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private-Subnet-1
+  subnetPrv2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private-Subnet-2
+  Nat:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 
+        - eip
+        - AllocationId
+      SubnetId: !Ref subnetPub1
+    DependsOn: eip
+  IGW:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Simplechat-IG
+  RouteTablePublic:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public-RT
+  RouteTablePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private-RT
+  gw:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+  subnetRoutePub1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref subnetPub1
+  subnetRoutePub2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref subnetPub2
+  subnetRoutePrv1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref subnetPrv1
+  subnetRoutePrv2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref subnetPrv2
+  routePublic:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref RouteTablePublic
+      GatewayId: !Ref IGW
+    DependsOn: gw
+  routePrivate:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref RouteTablePrivate
+      NatGatewayId: !Ref Nat
+    DependsOn:
+      - Nat
+      - subnetRoutePrv1
+      - subnetRoutePrv2
+  LoadBalancerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: simplechat_lb_sg
+      GroupName: simplechat_lb_sg
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+  WebServerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: simplechat_web_sg
+      GroupName: simplechat_web_sg
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+  RDSSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: simplechat_flask_sg
+      GroupName: simplechat_flask_sg
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '5000'
+          ToPort: '5000'
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+  DbSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupName: simplechat_db_subnet
+      DBSubnetGroupDescription: simplechat_db_subnet
+      SubnetIds:
+        - !Ref subnetPrv1
+        - !Ref subnetPrv2
+  DBParameterGroup:
+    Type: 'AWS::RDS::DBParameterGroup'
+    Properties:
+      Description: simplechat parameter group
+      Family: mysql5.7
+      Parameters:
+        character_set_client: utf8mb4
+        character_set_connection: utf8mb4
+        character_set_database: utf8mb4
+        character_set_results: utf8mb4
+        character_set_server: utf8mb4
+        collation_connection: utf8mb4_bin
+        collation_server: utf8mb4_bin
+  # DbInstance:
+  #   Type: 'AWS::RDS::DBInstance'
+  #   Properties:
+  #     DBInstanceIdentifier: simplechat-ecs-db
+  #     Engine: MySQL
+  #     EngineVersion: 5.7.22
+  #     AllocatedStorage: '5'
+  #     MasterUsername: !Ref MasterUserName
+  #     MasterUserPassword: !Ref MasterUserPassword
+  #     DBInstanceClass: db.t2.micro
+  #     DBSubnetGroupName: !Ref DbSubnetGroup
+  #     DBParameterGroupName: !Ref DBParameterGroup
+  #     VPCSecurityGroups:
+  #       - !Ref RDSSecurityGroup
+  ALB:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      LoadBalancerAttributes:
+        - Key: access_logs.s3.enabled
+          Value: 'false'
+        - Key: deletion_protection.enabled
+          Value: 'false'
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Name: simplechat-alb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref subnetPub1
+        - !Ref subnetPub2
+      Tags:
+        - Key: Name
+          Value: simplechat-alb
+  Cloud9Env:
+    Type: 'AWS::Cloud9::EnvironmentEC2'
+    Properties:
+      Name: simplechat_cloud9_env
+      Description: simplechat_cloud9_env
+      AutomaticStopTimeMinutes: '1440'
+      InstanceType: t2.micro
+      SubnetId: !Ref subnetPub1
